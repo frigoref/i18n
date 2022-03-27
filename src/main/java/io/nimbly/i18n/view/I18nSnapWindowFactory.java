@@ -19,6 +19,8 @@ import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowFactory;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentFactory;
+import com.intellij.ui.content.ContentManagerEvent;
+import com.intellij.ui.content.ContentManagerListener;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -26,7 +28,7 @@ import org.jetbrains.annotations.NotNull;
  * User: Maxime HAMM
  * Date: 14/01/2017
  *
- * @See QuickDocOnMouseOverManager
+ * See QuickDocOnMouseOverManager
  */
 public class I18nSnapWindowFactory implements ToolWindowFactory {
 
@@ -35,9 +37,25 @@ public class I18nSnapWindowFactory implements ToolWindowFactory {
 
         ContentFactory contentFactory = ContentFactory.SERVICE.getInstance();
 
-        // Translation
-        Content content = contentFactory.createContent(new TranslationSnapView(project), "Translation", false);
-        toolWindow.getContentManager().addContent(content);
+        // Individual Translation tab in I18n window
+        Content contentIndividualTranslation = contentFactory.createContent(new TranslationSnapView(), "Individual Translation", false);
+        toolWindow.getContentManager().addContent(contentIndividualTranslation);
+        // make sure view knows it is selected
+        ((AbstractI18nSnapView) contentIndividualTranslation.getComponent())
+              .setSelected(contentIndividualTranslation.isSelected());
+
+        // Mass Translation tab in I18n window
+        Content contentMassTranslation = contentFactory.createContent(new MassTranslationSnapView(), "Mass Translation", false);
+        toolWindow.getContentManager().addContent(contentMassTranslation);
+
+        // recognize changes in selected tab and forward the information to the view
+        toolWindow.getContentManager().addContentManagerListener(new ContentManagerListener() {
+            @Override
+            public void selectionChanged(@NotNull ContentManagerEvent event) {
+                final Content changedContent = event.getContent();
+                ((AbstractI18nSnapView) changedContent.getComponent()).setSelected(changedContent.isSelected());
+            }
+        });
     }
 
 }

@@ -18,14 +18,18 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.EditorFactory;
-import com.intellij.openapi.editor.event.*;
+import com.intellij.openapi.editor.event.CaretEvent;
+import com.intellij.openapi.editor.event.CaretListener;
+import com.intellij.openapi.editor.event.DocumentEvent;
+import com.intellij.openapi.editor.event.DocumentListener;
+import com.intellij.openapi.editor.event.EditorFactoryEvent;
+import com.intellij.openapi.editor.event.EditorFactoryListener;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.PsiDocumentManager;
 import com.intellij.util.containers.CollectionFactory;
-import org.jetbrains.annotations.NotNull;
-
-import javax.swing.*;
 import java.util.Map;
+import javax.swing.JPanel;
+import org.jetbrains.annotations.NotNull;
 
 /**
  * AbstractSnapView
@@ -34,9 +38,9 @@ import java.util.Map;
  */
 public abstract class AbstractSnapView extends JPanel {
 
-    private final MyDocumentListener myDocumentListener = new MyDocumentListener();
-    private final Map<Document, Boolean> myMonitoredDocuments  = CollectionFactory.createWeakMap();
-    private final CaretListener myCaretListener = new MyCaretListener();
+    private final transient MyDocumentListener myDocumentListener = new MyDocumentListener();
+    private final transient Map<Document, Boolean> myMonitoredDocuments  = CollectionFactory.createWeakMap();
+    private final transient CaretListener myCaretListener = new MyCaretListener();
 
     protected AbstractSnapView() {
         EditorFactory factory = EditorFactory.getInstance();
@@ -70,17 +74,6 @@ public abstract class AbstractSnapView extends JPanel {
         }
     }
 
-    /**
-     * unRegisterListeners
-     */
-    private void unRegisterListeners(@NotNull Editor editor) {
-        editor.getCaretModel().removeCaretListener(myCaretListener);
-
-        Document document = editor.getDocument();
-        if (myMonitoredDocuments.remove(document) != null) {
-            document.removeDocumentListener(myDocumentListener);
-        }
-    }
 
     /*************************************
      * MyEditorFactoryListener
@@ -95,6 +88,18 @@ public abstract class AbstractSnapView extends JPanel {
         public void editorReleased(@NotNull EditorFactoryEvent event) {
             unRegisterListeners(event.getEditor());
         }
+
+        /**
+         * unRegisterListeners
+         */
+        private void unRegisterListeners(@NotNull Editor editor) {
+            editor.getCaretModel().removeCaretListener(myCaretListener);
+
+            Document document = editor.getDocument();
+            if (myMonitoredDocuments.remove(document) != null) {
+                document.removeDocumentListener(myDocumentListener);
+            }
+        }
     }
 
     /*************************************
@@ -102,7 +107,7 @@ public abstract class AbstractSnapView extends JPanel {
      */
     private class MyCaretListener implements CaretListener {
         @Override
-        public void caretPositionChanged(CaretEvent e) {
+        public void caretPositionChanged(@NotNull CaretEvent e) {
             doCaretPositionChanged(e);
             myDocumentListener.setEditor(e.getEditor());
         }
@@ -120,7 +125,7 @@ public abstract class AbstractSnapView extends JPanel {
         }
 
         @Override
-        public void documentChanged(DocumentEvent e) {
+        public void documentChanged(@NotNull DocumentEvent e) {
             if (editor == null)
                 return;
             Project project = editor.getProject();

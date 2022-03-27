@@ -24,6 +24,10 @@ import com.intellij.psi.PsiFile;
  */
 public class SPsiUtils {
 
+    private SPsiUtils() {
+        throw new IllegalStateException("Utility class");
+    }
+
     /**
      * Find parent of type
      */

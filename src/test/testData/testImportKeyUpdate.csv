@@ -1,0 +1,3 @@
+Source Key,en Source Value,de Target Value,New Source Key
+test.Key1,My test,Mein Test,test.UpdKey1
+test.Key2,"My comma test, easy","Mein Kommatest, einfach",test.UpdKey2

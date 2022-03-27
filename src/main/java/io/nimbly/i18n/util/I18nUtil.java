@@ -23,29 +23,52 @@ import com.intellij.lang.properties.PropertiesFileType;
 import com.intellij.lang.properties.ResourceBundle;
 import com.intellij.lang.properties.psi.PropertiesElementFactory;
 import com.intellij.lang.properties.psi.PropertiesFile;
+import com.intellij.lang.properties.psi.Property;
 import com.intellij.lang.properties.psi.impl.PropertyImpl;
 import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.command.CommandProcessor;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.editor.Document;
+import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.module.Module;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Computable;
+import com.intellij.openapi.util.Pair;
+import com.intellij.openapi.util.ThrowableComputable;
+import com.intellij.openapi.util.text.Strings;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.psi.JavaTokenType;
+import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiPackage;
+import com.intellij.psi.PsiReference;
+import com.intellij.psi.impl.source.resolve.reference.impl.PsiMultiReference;
+import com.intellij.psi.impl.source.tree.TreeElement;
 import com.intellij.psi.search.FileTypeIndex;
 import com.intellij.psi.search.GlobalSearchScope;
+import com.intellij.util.SlowOperations;
 import com.intellij.util.net.HttpConfigurable;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.URLConnection;
 import java.net.URLEncoder;
-import java.util.*;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
+import kotlin.Triple;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * I18nHelper
@@ -57,16 +80,16 @@ public class I18nUtil {
     /**
      * The constant TEST_I18N_FOLDER.
      */
-    public static VirtualFile TEST_I18N_FOLDER = null;
-    private static Logger LOG = LoggerFactory.getInstance(I18nUtil.class);
+    public static final VirtualFile TEST_I18N_FOLDER = null;
+    public static final Logger LOG = LoggerFactory.getInstance(I18nUtil.class);
 
-    private static String preferedLanguage = null;
+    private static String preferredLanguage = null;
     private static String lastUsedLanguage = null;
 
-    //    private static final Map<Module, I18nUtil> instances = new HashMap<>();
     private static final Map<Module, I18nUtil> instances = new WeakHashMap<>();
     private final Module module;
 
+    // TODO: Maxime to remove unused fields and methods
     private VirtualFile cacheI8nFolder = null;
     private long lastUpdated = -1;
 
@@ -77,12 +100,9 @@ public class I18nUtil {
      * @return the instance
      */
     public static I18nUtil getInstance(Module module) {
-        I18nUtil i = instances.get(module);
-        if (i == null) {
-            i = new I18nUtil(module);
-            instances.put(module, i);
-        }
-        return i;
+        return instances.computeIfAbsent(module, m ->
+            new I18nUtil(module)
+        );
     }
 
     /**
@@ -135,19 +155,19 @@ public class I18nUtil {
      *
      * @return the prefered language
      */
-    public static String getPreferedLanguage() {
-        return preferedLanguage;
+    public static String getPreferredLanguage() {
+        return preferredLanguage;
     }
 
     /**
      * Sets user prefered language
      *
-     * @param preferedLanguage the prefered language
+     * @param preferredLanguage the prefered language
      */
-    public static void setPreferedLanguage(String preferedLanguage) {
-        I18nUtil.preferedLanguage = preferedLanguage;
-        if (preferedLanguage != null) {
-            setLastUsedLanguage(preferedLanguage);
+    public static void setPreferredLanguage(String preferredLanguage) {
+        I18nUtil.preferredLanguage = preferredLanguage;
+        if (preferredLanguage != null) {
+            setLastUsedLanguage(preferredLanguage);
         }
     }
 
@@ -258,7 +278,7 @@ public class I18nUtil {
     public static String getPreferedTranslation(String key, Module module) {
 
         // gets prefered language
-        String language = getPreferedLanguage();
+        String language = getPreferredLanguage();
         if (language == null)
             return null;
 
@@ -466,7 +486,7 @@ public class I18nUtil {
     private static List<PropertiesFile> innerGetPsiPropertiesFiles(String bundle, @Nullable String language, Module module) {
 
         if (module == null) {
-            return Collections.EMPTY_LIST;
+            return Collections.emptyList();
         }
 
         String message = "GetPsiPropertiesFiles for bundle '" + bundle + "', language '" + language + "', module '" + module.getName() + "'";
@@ -476,14 +496,14 @@ public class I18nUtil {
         PsiPackage pack = JavaUtil.findPackage(packageName, module);
         if (pack == null) {
             LOG.warn(message + " : package not found : '" + packageName + "' - STOP");
-            return Collections.EMPTY_LIST;
+            return Collections.emptyList();
         }
 
         PsiFile[] psiFiles = pack.getFiles(JavaUtil.getJavaSearchScope(module));
-        if (psiFiles == null) {
+        if (psiFiles.length == 0) {
 
             LOG.warn(message + " : no files found - STOP");
-            return Collections.EMPTY_LIST;
+            return Collections.emptyList();
         }
 
         String searched = bundle.substring(bundle.lastIndexOf('.') + 1) + "_";
@@ -531,10 +551,7 @@ public class I18nUtil {
             if (file instanceof PropertiesFile) {
 
                 String name = file.getName();
-                if (!name.contains("_"))
-                    continue;
-
-                if (vf.getPath().contains("/target/"))
+                if (!name.contains("_") || vf.getPath().contains("/target/"))
                     continue;
 
                 if (module.equals(JavaUtil.getModule(file)))
@@ -657,14 +674,12 @@ public class I18nUtil {
         for (String lang : targetLanguages) {
 
             PropertiesFile propertiesFile =  getPsiPropertiesFile(resourceBundle, lang);
-            if (propertiesFile == null)
-                continue;
+            if (propertiesFile != null) {
 
-            List<IProperty> psiProperties = getPsiProperties(propertiesFile, key, lang, null);
-            if (psiProperties.isEmpty())
-                continue;
-
-            translations.put(lang, unescapeKeepCR(psiProperties.get(0).getValue()));
+              List<IProperty> psiProperties = getPsiProperties(propertiesFile, key, lang, null);
+              if (!psiProperties.isEmpty())
+                translations.put(lang, unescapeKeepCR(psiProperties.get(0).getValue()));
+            }
         }
 
         // add suffix to key if target bundle is same as source bundle
@@ -674,13 +689,13 @@ public class I18nUtil {
         // insert translations
         String finalKey = key;
         executeWriteCommand(propertyFile.getProject(), "Duplicate key '" + key + "'", () -> {
-            for (String lang : translations.keySet()) {
+            for (Map.Entry<String, String> translation : translations.entrySet()) {
 
-                PropertiesFile propertiesFile =  getPsiPropertiesFile(resourceBundle, lang);
+                PropertiesFile propertiesFile =  getPsiPropertiesFile(resourceBundle, translation.getKey());
                 if (propertiesFile == null)
                     continue;
 
-                doUpdateTranslation(finalKey, translations.get(lang), propertiesFile, true);
+                doUpdateTranslation(finalKey, translation.getValue(), propertiesFile, true);
             }
         });
 
@@ -796,7 +811,7 @@ public class I18nUtil {
             if (path == null)
                 return null;
         }
-        return path.substring(0, path.indexOf('_')).replaceAll("/", ".");
+        return path.substring(0, path.indexOf('_')).replace("/", ".");
     }
 
     /**
@@ -872,7 +887,7 @@ public class I18nUtil {
             return null;
         }
 
-        VirtualFile resources[] = folder.getChildren();
+        VirtualFile[] resources = folder.getChildren();
         for (int i = 0; i < resources.length; i++) {
 
             VirtualFile subFolder = getI18nFolder(resources[i]);
@@ -903,12 +918,12 @@ public class I18nUtil {
                 sb.append(s.toLowerCase());
             else {
                 String x = CaseFormat.LOWER_CAMEL.to(CaseFormat.LOWER_UNDERSCORE, s);
-                x = x.replaceAll("_", " ");
+                x = x.replace("_", " ");
                 sb.append(x);
             }
         }
 
-        return StringUtil.capitalize(sb.toString());
+        return Strings.capitalize(sb.toString());
     }
 
     /**
@@ -921,16 +936,15 @@ public class I18nUtil {
      * @return the string
      * @throws IOException the io exception
      */
-    public static String googleTranslate(String key, String targetLanguage, String sourceLanguage, String sourceTranslation) throws IOException {
-
+    public static String googleTranslate(String sourceLanguage, String targetLanguage, String sourceTranslation, String key) throws IOException {
+        if (sourceLanguage.equals(targetLanguage)) return sourceTranslation;
         String translation = callUrlAndParseResult(sourceLanguage, targetLanguage, sourceTranslation);
 
         // Tips : if google return the same as source, try using the key directly...
-        if (translation.equals(sourceTranslation)) {
+        if (translation == null || translation.equals(sourceTranslation)) {
 
             String keyForTranslation = I18nUtil.prepareKeyForGoogleTranslation(key);
             if (! sourceTranslation.equals(keyForTranslation)) {
-
                 translation = callUrlAndParseResult(Locale.ENGLISH.getLanguage(), targetLanguage, keyForTranslation);
             }
         }
@@ -942,9 +956,9 @@ public class I18nUtil {
 
         // Tune lower or uppercase according to source
         if (Character.isUpperCase(sourceTranslation.charAt(0)))
-            translation = StringUtil.capitalize(translation);
+            translation = Strings.capitalize(translation);
 
-        // TIPS : Keep space before ponctuation at end
+        // TIPS : Keep space before punctuation at end
         if (translation.length()>2 && sourceTranslation.length()>2
                 && sourceTranslation.charAt(sourceTranslation.length()-2) == ' '
                 && translation.charAt(translation.length()-2) != ' ' && translation.charAt(translation.length()-1) == sourceTranslation.charAt(sourceTranslation.length()-1)) {
@@ -960,9 +974,9 @@ public class I18nUtil {
 
         String url = "https://translate.googleapis.com/translate_a/single?" +
                 "client=gtx&" +
-                "sl=" + URLEncoder.encode(langFrom, "UTF-8") +
-                "&tl=" + URLEncoder.encode(langTo, "UTF-8") +
-                "&dt=t&q=" + URLEncoder.encode(word, "UTF-8");
+                "sl=" + URLEncoder.encode(langFrom, StandardCharsets.UTF_8.name()) +
+                "&tl=" + URLEncoder.encode(langTo, StandardCharsets.UTF_8.name()) +
+                "&dt=t&q=" + URLEncoder.encode(word, StandardCharsets.UTF_8.name());
 
         URLConnection con = HttpConfigurable.getInstance().openConnection(url);
 
@@ -970,7 +984,7 @@ public class I18nUtil {
 
         BufferedReader in = new BufferedReader(new InputStreamReader(con.getInputStream()));
         String inputLine;
-        StringBuffer response = new StringBuffer();
+        StringBuilder response = new StringBuilder();
 
         while ((inputLine = in.readLine()) != null) {
             response.append(inputLine);
@@ -1018,12 +1032,156 @@ public class I18nUtil {
         CommandProcessor.getInstance().executeCommand(project, () -> {
 
                     Application application = ApplicationManager.getApplication();
-                    application.runWriteAction(() -> {
-
-                        runnable.run();
-                    });
+                    application.runWriteAction(runnable::run);
                 },
                 text, "I18N+");
     }
 
+    /**
+     * findI18nKey
+     */
+    public static String findI18nKey(PsiElement target) {
+
+        if (target instanceof Property) {
+
+            Property property = (Property)target;
+            return property.getFirstChild().getText().trim();
+        }
+
+        String text = target.getText();
+        if (!text.startsWith("'") && !text.startsWith("\""))
+            return null;
+
+        return StringUtilExt.removeQuotes(target.getText());
+    }
+
+    /**
+     * findI18nKey
+     */
+    public static Pair<String, PsiFile> findI18nKey(PsiReference target) {
+
+        // multi references
+        if (target instanceof PsiMultiReference) {
+
+            PsiMultiReference mref = (PsiMultiReference)target;
+            for (PsiReference ref : mref.getReferences()) {
+
+                Pair<String, PsiFile> key = findI18nKey(ref);
+                if (key != null)
+                    return key;
+            }
+
+            return null;
+        }
+
+        return new Pair<>(StringUtilExt.removeQuotes(target.getCanonicalText()) ,target.getElement().getContainingFile());
+    }
+
+    /**
+     * findTarget
+     */
+    public static PsiElement findTarget(Editor editor) {
+        int offset = editor.getCaretModel().getOffset();
+
+        Project editorProject = editor.getProject();
+        if (editorProject == null)
+            return null;
+
+        //if (!editorProject.equals(projectCurrent))
+        //    return null;
+
+        Document document = editor.getDocument();
+
+        PsiFile file = FileUtil.getFile(document, editorProject);
+        if (file == null)
+            return null;
+
+        PsiElement element = file.findElementAt(offset);
+        if (element == null)
+            return null;
+
+        Property property = SPsiUtils.findSurrounding(element, Property.class);
+        if (property !=null) {
+            return property.getNavigationElement();
+        }
+
+        if (element instanceof TreeElement) {
+            TreeElement token = (TreeElement)element;
+            if (JavaTokenType.STRING_LITERAL.equals(token.getElementType())) {
+                return element;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * findReferenceTarget
+     */
+    public static PsiReference findReferenceTarget(Editor editor) {
+
+        int offset = editor.getCaretModel().getOffset();
+
+        Project project = editor.getProject();
+        if (project == null)
+            return null;
+
+        //if (!project.equals(projectCurrent))
+        //    return null;
+
+        Document document = editor.getDocument();
+
+        PsiFile file = FileUtil.getFile(document, project);
+        if (file == null)
+            return null;
+
+        PsiReference referenceAt = file.findReferenceAt(offset);
+        if (referenceAt != null)
+            return referenceAt;
+
+        return file.getFirstChild().getReference();
+
+    }
+
+    @NotNull
+    public static Triple<String, PsiFile, Module> findI18nKeyFromEditor(final Editor editor) {
+        Module module = null;
+        String i18nKey = null;
+        PsiFile originFile = null;
+
+        // Search for reference
+        LOG.trace("findI18nKeyFromEditor : search for reference...");
+        PsiReference referenceTarget = null;
+        try {
+            referenceTarget = SlowOperations.allowSlowOperations((ThrowableComputable<PsiReference, Throwable>) () ->
+                findReferenceTarget(editor));
+        } catch (Throwable e) {
+            LOG.error("Translation init error", e);
+        }
+        LOG.trace("findI18nKeyFromEditor : reference : " + referenceTarget);
+        if (referenceTarget != null) {
+            module = JavaUtil.getModule(referenceTarget.getElement());
+            final Pair<String, PsiFile> i18nKeyFile = findI18nKey(referenceTarget);
+            if (i18nKeyFile != null) {
+               i18nKey = i18nKeyFile.getFirst();
+               originFile = i18nKeyFile.getSecond();
+            }
+        }
+
+        // search by target of editor
+        if (i18nKey == null) {
+
+            LOG.trace("findI18nKeyFromEditor : key not found yet...");
+            // Search for element
+            PsiElement target = findTarget(editor);
+            LOG.trace("findI18nKeyFromEditor : target : " + target);
+            if (target != null) {
+                module = JavaUtil.getModule(target);
+                i18nKey = findI18nKey(target);
+                originFile = target.getContainingFile();
+            }
+        }
+
+        return new Triple<>(i18nKey,originFile,module);
+    }
 }

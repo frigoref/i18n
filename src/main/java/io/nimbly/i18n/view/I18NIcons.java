@@ -14,6 +14,7 @@
  */
 package io.nimbly.i18n.view;
 
+import com.intellij.icons.AllIcons;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.util.IconLoader;
 import io.nimbly.i18n.util.LoggerFactory;
@@ -32,12 +33,12 @@ public interface I18NIcons {
     Logger LOG = LoggerFactory.getInstance(I18NIcons.class);
     
     Icon GOOGLE_TRANSALTE = IconLoader.getIcon("/io/nimbly/i18n/icons/g_trans.png", I18NIcons.class);
-
+// TODO Maxime: validate replacements
     Icon EDIT = IconLoader.getIcon("/io/nimbly/i18n/icons/edit.png", I18NIcons.class);
     Icon FIND = IconLoader.getIcon("/io/nimbly/i18n/icons/find.png", I18NIcons.class);
-    Icon DELETE = IconLoader.getIcon("/io/nimbly/i18n/icons/delete.png", I18NIcons.class);
-    Icon ADD = IconLoader.getIcon("/io/nimbly/i18n/icons/add.png", I18NIcons.class);
-    Icon DUPLICATE = IconLoader.getIcon("/io/nimbly/i18n/icons/add.png", I18NIcons.class);
+    Icon DELETE = AllIcons.CodeWithMe.CwmTerminate;//IconLoader.getIcon("/io/nimbly/i18n/icons/delete.png", I18NIcons.class);
+    Icon ADD = AllIcons.Hierarchy.MethodDefined; //IconLoader.getIcon("/io/nimbly/i18n/icons/add.png", I18NIcons.class);
+    Icon DUPLICATE = AllIcons.Hierarchy.MethodDefined; //IconLoader.getIcon("/io/nimbly/i18n/icons/add.png", I18NIcons.class);
 
     Icon LEFT = IconLoader.getIcon("/io/nimbly/i18n/icons/left.png", I18NIcons.class);
     Icon RIGHT = IconLoader.getIcon("/io/nimbly/i18n/icons/right.png", I18NIcons.class);

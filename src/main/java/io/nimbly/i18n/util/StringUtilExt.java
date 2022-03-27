@@ -19,7 +19,7 @@ package io.nimbly.i18n.util;
  * User: Maxime HAMM
  * Date: 12/06/2016
  */
-public class StringUtil extends com.intellij.openapi.util.text.StringUtil {
+public class StringUtilExt extends com.intellij.openapi.util.text.StringUtil {
 
     /**
      * Remove quotes

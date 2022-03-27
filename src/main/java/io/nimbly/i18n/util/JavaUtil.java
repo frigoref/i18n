@@ -31,7 +31,11 @@ import org.jetbrains.annotations.Nullable;
  */
 public class JavaUtil {
 
-    public static String TEST_MODULE_PATH = null;
+  public static final String TEST_MODULE_PATH = null;
+
+    private JavaUtil() {
+        throw new IllegalStateException("Utility class");
+    }
 
     /**
      * Get's module scope
@@ -76,7 +80,7 @@ public class JavaUtil {
          if (module == null)
             return null;
 
-        String path = module.getModuleFilePath();
+        String path = module.getModuleFile().getPath();
         return VirtualFileManager.getInstance().findFileByUrl("file://" + path.substring(0, path.lastIndexOf('/')));
     }
 

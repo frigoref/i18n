@@ -14,17 +14,18 @@
  */
 package io.nimbly.i18n.view;
 
-import com.intellij.ide.ui.laf.IntelliJLaf;
 import com.intellij.lang.properties.IProperty;
-import com.intellij.lang.properties.ResourceBundle;
 import com.intellij.lang.properties.psi.PropertiesFile;
-import com.intellij.lang.properties.psi.Property;
 import com.intellij.lang.properties.psi.impl.PropertyKeyImpl;
-import com.intellij.openapi.actionSystem.*;
+import com.intellij.openapi.actionSystem.ActionGroup;
+import com.intellij.openapi.actionSystem.ActionManager;
+import com.intellij.openapi.actionSystem.ActionToolbar;
+import com.intellij.openapi.actionSystem.AnAction;
+import com.intellij.openapi.actionSystem.AnActionEvent;
+import com.intellij.openapi.actionSystem.DefaultActionGroup;
+import com.intellij.openapi.actionSystem.ToggleAction;
 import com.intellij.openapi.application.ApplicationManager;
-import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.Document;
-import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.event.CaretEvent;
 import com.intellij.openapi.editor.event.DocumentEvent;
 import com.intellij.openapi.editor.event.DocumentListener;
@@ -33,14 +34,12 @@ import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.progress.Task.Backgroundable;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.ui.ComboBox;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.Computable;
-import com.intellij.openapi.util.ThrowableComputable;
-import com.intellij.pom.Navigatable;
-import com.intellij.psi.*;
-import com.intellij.psi.impl.source.resolve.reference.impl.PsiMultiReference;
-import com.intellij.psi.impl.source.tree.TreeElement;
+import com.intellij.openapi.util.NlsContexts;
+import com.intellij.psi.PsiDocumentManager;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiFile;
 import com.intellij.ui.ScrollPaneFactory;
 import com.intellij.ui.components.ActionLink;
 import com.intellij.ui.components.JBScrollPane;
@@ -49,162 +48,118 @@ import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.util.SlowOperations;
 import com.intellij.util.ThrowableRunnable;
 import com.intellij.util.ui.JBUI;
-import io.nimbly.i18n.util.*;
-import org.jetbrains.annotations.NotNull;
-
-import javax.swing.*;
-import javax.swing.border.EtchedBorder;
-import javax.swing.text.JTextComponent;
-import java.awt.*;
-import java.awt.event.*;
+import io.nimbly.i18n.util.FileUtil;
+import io.nimbly.i18n.util.I18nUtil;
+import io.nimbly.i18n.util.IconUtil;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.event.ActionListener;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
+import java.awt.event.FocusListener;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
-import java.util.*;
+import java.util.Locale;
+import java.util.Map;
+import javax.swing.Icon;
+import javax.swing.JButton;
+import javax.swing.JComponent;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTextField;
+import javax.swing.JTextPane;
+import javax.swing.ScrollPaneConstants;
+import javax.swing.SwingConstants;
+import javax.swing.border.EtchedBorder;
+import javax.swing.text.JTextComponent;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * TranslationView
  * User: Maxime HAMM
  * Date: 14/01/2017
  */
-public class TranslationSnapView extends AbstractSnapView {
+public class TranslationSnapView extends AbstractI18nSnapView {
 
-    private static Logger LOG = LoggerFactory.getInstance(TranslationSnapView.class);
     public static final String NIMBLY = "Nimbly";
-
-    public static final String BLOCK_I18N = "BLOCK_I18N";
 
     public static final String DELETE_KEY = "Delete";
     public static final String CREATE_KEY = "Create key";
-    public static final String BLOCK_REFRESH = "BLOCK_REFRESH";
 
-    private final ActionToolbar editActionToolBar;
+    private final transient ActionToolbar editActionToolBar;
 
-    private JPanel translationWindow;
-    private JTextField key;
+  private final JTextField keyTextField =
+      new JTextField() {
+        @Override
+        public void setEditable(boolean b) {
+          super.setEditable(b);
 
-    private ActionLink[] flags;
+          JComponent fake = b ? new JTextField() : new JLabel();
+          setBorder(fake.getBorder());
+          setBackground(fake.getBackground());
+          setFont(
+              fake.getFont()
+                  .deriveFont(
+                      fake.getFont().getStyle() | Font.BOLD, fake.getFont().getSize() + 0f));
+        }
+      };
+
     private JTextComponent[] translations;
     private ActionLink[] languages;
 
-    private ComboBox<MyPropertiesFileInfo> resourcesGroup;
-    private JButton duplicateButton;
-    private JButton deleteOrCreateKeyButton;
+    private final JPanel translationPanel = new JPanel();
+    private final JButton duplicateButton = new JButton();
+    private final JButton deleteOrCreateKeyButton = new JButton();
 
-    private MyTranslationPaneAdapter[] translationsPaneAdaptors = null;
-    private Map<Document, MyPropertiesFileAdapter> propertiesFileAdaptors = new HashMap<>();
+    private transient MyTranslationPaneAdapter[] translationsPaneAdaptors = null;
+    private final transient Map<Document, MyPropertiesFileAdapter> propertiesFileAdaptors = new HashMap<>();
 
-    private TranslationModel model = null;
+    private final transient ToggleAction editAction = new ToggleAction("Edit Key") {
 
-    private ToggleAction editAction;
-    private Project project;
+        @Override
+        public boolean isSelected(@NotNull AnActionEvent e) {
+            return keyTextField.isEditable();
+        }
+
+        @Override
+        public void setSelected(@NotNull final AnActionEvent e, final boolean state) {
+            keyTextField.setEditable(state);
+            if (state)
+                keyTextField.grabFocus();
+            else if (keyTextField.hasFocus())
+                keyTextField.transferFocus();
+        }
+
+        @Override
+        public void update(@NotNull AnActionEvent e) {
+            if  (deleteOrCreateKeyButton.getText().equals(CREATE_KEY)) {
+                e.getPresentation().setIcon(I18NIcons.FIND);
+                e.getPresentation().setText("Select Another Key or Create a New Key...", false);
+            }
+            else {
+                e.getPresentation().setIcon(I18NIcons.EDIT);
+                e.getPresentation().setText("Rename Key...", false);
+            }
+        }
+    };
 
     /**
      * TranslationSnapView
-     * @param project The project
      */
-    public TranslationSnapView(Project project) {
-
-        this.project = project;
-
-        // init UI
-        setLayout(new GridLayoutManager(2, 1));
-
-        deleteOrCreateKeyButton = new JButton();
-        deleteOrCreateKeyButton.setText(DELETE_KEY);
-        deleteOrCreateKeyButton.addActionListener(e -> {
-            if (DELETE_KEY.equals(deleteOrCreateKeyButton.getText())) {
-                String key = model.getSelectedKey();
-                try {
-                    SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) () -> {
-                        model.deleteKey();
-                        initTranslationKey(key, true, model.getOriginFile(), model.getModule());
-                    });
-                } catch (Throwable ee) {
-                    LOG.error("Translation init error", ee);
-                }
-            }
-            else {
-                model.createKey();
-            }
-
-            refreshWhenDocumentUpdated();
-        });
-        deleteOrCreateKeyButton.setFont(deleteOrCreateKeyButton.getFont().deriveFont(deleteOrCreateKeyButton.getFont().getStyle(), deleteOrCreateKeyButton.getFont().getSize() -2));
-
-        duplicateButton = new JButton();
-        duplicateButton.addActionListener(e -> {
-            try {
-                SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) this::duplicateKey);
-            } catch (Throwable ee) {
-                LOG.error("Translation init error", ee);
-            }
-        });
-        duplicateButton.setIcon(I18NIcons.DUPLICATE);
-        duplicateButton.setFont(duplicateButton.getFont().deriveFont(duplicateButton.getFont().getStyle(), duplicateButton.getFont().getSize() -2));
-        duplicateButton.setText("Duplicate key");
-
-        resourcesGroup = new ComboBox<>();
-        resourcesGroup.setModel(new DefaultComboBoxModel<>());
-        resourcesGroup.setRenderer(new DefaultListCellRenderer());
-
-        resourcesGroup.setFont(resourcesGroup.getFont().deriveFont(resourcesGroup.getFont().getStyle(), resourcesGroup.getFont().getSize() -2));
-        resourcesGroup.setBackground(deleteOrCreateKeyButton.getBackground());
-        resourcesGroup.addItemListener(event -> {
-
-            if (ItemEvent.SELECTED != event.getStateChange())
-                return;
-
-            if (Boolean.TRUE.equals(resourcesGroup.getClientProperty(BLOCK_REFRESH)))
-                return;
-
-            Object item = event.getItem();
-            if (item instanceof MyPropertiesFileInfo) {
-                MyPropertiesFileInfo info = (MyPropertiesFileInfo) item;
-                PropertiesFile propertiesFile = info.getPropertiesFile();
-
-                try {
-                    SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) () ->
-                            loadTranslation(key.getText(), propertiesFile));
-                } catch (Throwable ee) {
-                    LOG.error("Translation init error", ee);
-                }
-
-            }
-        });
+    public TranslationSnapView() {
+        super(new GridLayoutManager(2, 1));
 
         ActionGroup editActionGroup = createEditActionGroup();
         editActionToolBar = ActionManager.getInstance().createActionToolbar("EDIT", editActionGroup, true);
-        editActionToolBar.setMinimumButtonSize(new Dimension(25, 20));
-        editActionToolBar.setTargetComponent(this);
-
-
-        initComponents(Collections.emptyList());
-
-        // find potential string literal to load
-        for (Editor editor : FileUtil.getEditors()) {
-            int offset = editor.getCaretModel().getOffset();
-            if (offset >= 0) {
-                PsiElement target = findTarget(editor);
-                if (target == null)
-                    continue;
-
-                Module module = JavaUtil.getModule(target);
-                String text = findI18NKey(target, module);
-                if (text != null) {
-                    String key = StringUtil.removeQuotes(text);
-
-                    try {
-                        SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) () ->
-                                initTranslationKey(key, false, FileUtil.getFile(editor), module));
-                    } catch (Throwable ee) {
-                        LOG.error("Translation init error", ee);
-                    }
-
-                    return;
-                }
-            }
-        }
 
     }
 
@@ -213,33 +168,16 @@ public class TranslationSnapView extends AbstractSnapView {
      */
     private void duplicateKey() {
 
-        Module module = model.getModule();
-
         boolean editable = translations[0].isEditable();
 
         String newKey = model.duplicateKey();
-
-        model = new TranslationModel(newKey, model.getOriginFile(), model.getSelectedPropertiesFile(), module);
-        loadTranslation(newKey, null);
+        model.setSelectedKey(newKey);
+        updateUiOrFlagDirty();
 
         if (editable) {
-            editAction.setSelected(null, true);
+            editAction.setSelected(null, true); //standard class has @NotNull AnActionEvent, but own implementation doesn't need this parameter
         }
 
-    }
-
-    /**
-     * doEditorDocumentChanged
-     */
-    @Override
-    protected void doEditorDocumentChanged(Editor editor, DocumentEvent e) {
-        if (editor.isDisposed())
-            return;
-
-        if (! editor.getComponent().hasFocus())
-            return;
-
-        initTranslation(editor);
     }
 
     /**
@@ -263,164 +201,44 @@ public class TranslationSnapView extends AbstractSnapView {
         ApplicationManager.getApplication().runReadAction(() -> {
             try {
                 SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) () ->
-                        initTranslation(event.getEditor()));
+                        updateModelFromEditor(event.getEditor()));
             } catch (Throwable e) {
-                LOG.error("Translation init error", e);
+                LOG.error("doCaretPositionChanged", e);
             }
         });
 
-//        DumbService.getInstance(Objects.requireNonNull(event.getEditor().getProject())).runReadActionInSmartMode(() -> {
-//            try {
-//                SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) () ->
-//                        initTranslation(event.getEditor()));
-//            } catch (Throwable e) {
-//                LOG.error("Translation init error", e);
-//            }
-//        });
     }
 
-    /**
-     * Init translations
-     */
-    private void initTranslationKey(final String fullI18nKey, boolean force, PsiFile originFile, final Module module) {
 
-        LOG.debug("initTranslation for key '" + fullI18nKey + "'");
-        if (module == null) {
-            LOG.trace("initTranslation for key '" + fullI18nKey + "' : no module found - STOP");
-            return;
-        }
-        
-        if (!force && model != null && model.getKeyPath().equals(fullI18nKey)) {
-            LOG.trace("initTranslation for key '" + fullI18nKey + "' : same key already selected - STOP");
-            return;
-        }
+    @Override
+    protected void updateUiComponents(final String i18nKey) {
+        initComponentsDynamic();
+        updateTranslations(i18nKey);
 
-        PropertiesFile currentFile = model != null ? model.getSelectedPropertiesFile() : null;
-        model = new TranslationModel(fullI18nKey, originFile, null, module);
-        if (model.getSelectedPropertiesFile() == null) {
-
-            if (originFile instanceof PropertiesFile) {
-                model.selectPropertiesFile((PropertiesFile) originFile);
-            }
-            else if (currentFile != null) {
-                model.selectPropertiesFile(currentFile);
-            }
-            else {
-
-                List<ResourceBundle> bundles = I18nUtil.getResourceBundles(module);
-                if (! bundles.isEmpty()) {
-
-                    for (PropertiesFile pf : bundles.get(0).getPropertiesFiles()) {
-
-                        if (pf.getVirtualFile().isWritable() && "en".equals(I18nUtil.getLanguage(pf))) {
-
-                            model.selectPropertiesFile(pf);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        loadTranslation(fullI18nKey, null);
-
+        //
+        // Update "open ressource button"
+        LOG.trace("updateUiComponents for key '" + i18nKey);
+        updateResourcesGroupButton(null);
     }
 
-    /**
-     * Load translations
-     */
-    private void loadTranslation(final String i18nKey, PropertiesFile forceFile) {
-
-        LOG.info("loadTranslation for key '" + i18nKey + "'");
-        model.setSelectedKey(i18nKey);
-        if (forceFile != null) {
-            LOG.trace("loadTranslation for key '" + i18nKey + "' using file '" + forceFile + "'");
-            model.selectPropertiesFile(forceFile);
-        }
-
-        //
-        // Update UI if necessary
-        List<String> moduleLanguages = model.getLanguages();
-        if (moduleLanguages.isEmpty()) {
-
-            LOG.trace("loadTranslation for key '" + i18nKey + "' : NO LANGUAGE FOUND - STOP");
-            return;
-        }
-
-        if (flags==null || flags.length != moduleLanguages.size()) {
-
-            LOG.trace("loadTranslation for key '" + i18nKey + "' : update languages list");
-
-            // clear resourcesGroup and listener
-            if (translationWindow !=null)
-                this.remove(translationWindow);
-
-            if (this.translations !=null) {
-                for (int i = 0; i < this.translations.length; i++) {
-                    translations[i].getDocument().removeDocumentListener(translationsPaneAdaptors[i]);
-                    translations[i].removeFocusListener(translationsPaneAdaptors[i]);
-                }
-            }
-
-            for (Document doc : propertiesFileAdaptors.keySet()) {
-                MyPropertiesFileAdapter listener = propertiesFileAdaptors.get(doc);
-                if (listener!=null)
-                    doc.removeDocumentListener(listener);
-            }
-            propertiesFileAdaptors.clear();
-
-            // reload swing
-            initComponents(moduleLanguages);
-
-            this.add(translationWindow, new GridConstraints(1, 0, 1, 1,
-                    GridConstraints.ANCHOR_NORTHWEST, GridConstraints.FILL_BOTH,
-                    GridConstraints.SIZEPOLICY_CAN_GROW,
-                    GridConstraints.SIZEPOLICY_CAN_GROW,
-                    new Dimension(100, 0), null, null));
-
-            // setup listeners
-            this.translationsPaneAdaptors = new MyTranslationPaneAdapter[this.flags.length];
-            for (int i=0; i<this.flags.length; i++) {
-
-                String lang = moduleLanguages.get(i);
-
-                this.flags[i].setIcon(I18NIcons.getFlag(lang));
-
-                Icon ico = IconUtil.addText(I18NIcons.TRANSPARENT, lang.toUpperCase(), 12f, SwingConstants.CENTER);
-                this.languages[i].setIcon(ico);
-                this.languages[i].setDisabledIcon(ico);
-
-                this.translationsPaneAdaptors[i] = new MyTranslationPaneAdapter(i);
-                this.translations[i].getDocument().addDocumentListener(translationsPaneAdaptors[i]);
-                this.translations[i].addFocusListener(translationsPaneAdaptors[i]);
-            }
-
-            LOG.trace("loadTranslation for key '" + i18nKey + "' : update languages list - done");
-        }
-
-        //
-        // Sets key
-        LOG.trace("loadTranslation for key '" + i18nKey + "' : setup text");
-        this.key.setText(i18nKey);
-        this.key.setEditable(false);
-        LOG.trace("loadTranslation for key '" + i18nKey + "' : setup text - done");
-
-        //
+    private void updateTranslations(final String i18nKey) {
         // Load psi translations
+        final List<String> moduleLanguages = model.getLanguages();
         boolean isWritable = false;
         boolean atLeasOneTranslations = false;
         IProperty[] translationProperties = new IProperty[this.flags.length];
         for (int i=0; i<this.flags.length; i++) {
 
-            String lang = getLanguage(i);
+            final String lang = moduleLanguages.get(i);
+
             List<IProperty> psiProperties = model.getPsiProperties(lang);
             IProperty prop = psiProperties.isEmpty() ? null : psiProperties.get(0);
 
             if (prop !=null) {
 
                 //
-                // if property file not part if current model, do not edit it !
-                // This is possible when using another module (i.e not jars)
+                // if property file not part of current model, do not edit it !
+                // This is possible when using another module (i.e. not jars)
                 PsiFile containingFile = prop.getPropertiesFile().getContainingFile();
                 boolean w = containingFile.isWritable();
 
@@ -432,12 +250,41 @@ public class TranslationSnapView extends AbstractSnapView {
             LOG.trace("loadTranslation for key '" + i18nKey + "' : find translation properties for language '" + lang + "'");
         }
 
+        updateTranslationComponents(i18nKey, moduleLanguages, isWritable, atLeasOneTranslations, translationProperties);
+
         //
-        // Update translations
+        // Sets key
+        LOG.trace("loadTranslation for key '" + i18nKey + "' : setup text");
+        this.keyTextField.setText(i18nKey);
+        this.keyTextField.setEditable(false);
+        LOG.trace("loadTranslation for key '" + i18nKey + "' : setup text - done");
+
+        // Update create or delete key button
+        LOG.trace("loadTranslation for key '" + i18nKey + "' : update CRUD buttons'");
+        updateCRUDButtons(atLeasOneTranslations);
+    }
+
+    private void updateTranslationComponents(final String i18nKey, final List<String> moduleLanguages, final boolean isWritable, final boolean atLeasOneTranslations, final IProperty[] translationProperties) {
         for (int i=0; i<this.flags.length; i++) {
 
-            // disable fields if no translation att all
-            this.translations[i].setBackground(atLeasOneTranslations&isWritable ? new JTextField().getBackground() : translationWindow.getBackground());
+            final String lang = moduleLanguages.get(i);
+
+            // adjust listeners if flags/languages sequence is not matching
+            Icon ico = IconUtil.addText(I18NIcons.TRANSPARENT, lang.toUpperCase(), 12f, SwingConstants.CENTER);
+            if (!ico.equals(flags[i].getIcon())) {
+                this.flags[i].setIcon(ico);
+
+                this.languages[i].setIcon(ico);
+                this.languages[i].setDisabledIcon(ico);
+
+                this.translationsPaneAdaptors[i] = new MyTranslationPaneAdapter(i);
+                this.translations[i].getDocument().addDocumentListener(translationsPaneAdaptors[i]);
+                this.translations[i].addFocusListener(translationsPaneAdaptors[i]);
+            }
+
+
+            // disable fields if no translation at all
+            this.translations[i].setBackground(atLeasOneTranslations && isWritable ? new JTextField().getBackground() : translationWindow.getBackground());
             this.translations[i].setEnabled(atLeasOneTranslations);
             this.translations[i].setEditable(isWritable);
 
@@ -460,22 +307,26 @@ public class TranslationSnapView extends AbstractSnapView {
 
             this.languages[i].setEnabled(isWritable);
         }
-
-        // Update create or delete key button
-        LOG.trace("loadTranslation for key '" + i18nKey + "' : update CRUD buttons'");
-        updateCRUDButtons(atLeasOneTranslations);
-
-        //
-        // Update "open ressource button"
-        LOG.trace("loadTranslation for key '" + i18nKey + "' : update Edit button");
-        updateEditButton(null);
     }
 
-    private String getLanguage(int index) {
-        List<String> languages = model.getLanguages();
-        if (index > languages.size()-1)
-            return null;
-        return languages.get(index);
+    @Override
+    protected void initializeTranslationWindow() {
+        if (translationWindow != null)
+            this.remove(translationWindow);
+
+        if (this.translations != null) {
+            for (int i = 0; i < this.translations.length; i++) {
+                translations[i].getDocument().removeDocumentListener(translationsPaneAdaptors[i]);
+                translations[i].removeFocusListener(translationsPaneAdaptors[i]);
+            }
+        }
+
+        for (Map.Entry<Document, MyPropertiesFileAdapter> propertiesFileAdaptor : propertiesFileAdaptors.entrySet()) {
+            MyPropertiesFileAdapter listener = propertiesFileAdaptor.getValue();
+            if (listener!=null)
+                propertiesFileAdaptor.getKey().removeDocumentListener(listener);
+        }
+        propertiesFileAdaptors.clear();
     }
 
     /**
@@ -492,67 +343,11 @@ public class TranslationSnapView extends AbstractSnapView {
 
         duplicateButton.setVisible(atLeasOneTranslations && isWritable);
 
-        try {
-            String tooltip = isWritable ? model.getSelectedBundleTooltip() : TranslationModel.getTooltip("*", I18nUtil.getLocalPsiPropertiesFiles(model.getModule()).get(0), model.getModule());
-            deleteOrCreateKeyButton.setToolTipText(tooltip);
-            duplicateButton.setToolTipText(tooltip);
-        } catch (Exception ignored) {
-        }
+        String tooltip = isWritable ? model.getSelectedBundleTooltip() : TranslationModel.getTooltip("*", I18nUtil.getLocalPsiPropertiesFiles(model.getModule()).get(0), model.getModule());
+        deleteOrCreateKeyButton.setToolTipText(tooltip);
+        duplicateButton.setToolTipText(tooltip);
 
         editActionToolBar.getComponent().setVisible(model.getSelectedPropertiesFile().getVirtualFile().isWritable());
-    }
-
-    /**
-     * updateEditButton
-     * @param language
-     */
-    private void updateEditButton(String language) {
-
-        if (language!=null && language.equals(model.getSelectedLanguage()))
-            return;
-
-        if (language !=null)
-            model.setSelectedLanguage(language);
-
-        // Update Resource selection list
-        List<PropertiesFile> propertiesFiles = model.getPropertiesFiles();
-        List<PropertiesFile> current = new ArrayList<>();
-        for (int i=0; i<resourcesGroup.getItemCount(); i++) {
-            MyPropertiesFileInfo item = (MyPropertiesFileInfo) resourcesGroup.getItemAt(i);
-            current.add(item.getPropertiesFile());
-        }
-        if (! Arrays.equals(propertiesFiles.toArray(), current.toArray())) {
-            try {
-                resourcesGroup.putClientProperty(BLOCK_REFRESH, true);
-                resourcesGroup.removeAllItems();
-                for (PropertiesFile pf : propertiesFiles) {
-                    String label = model.getShortName(pf);
-                    MyPropertiesFileInfo info = new MyPropertiesFileInfo(label, pf, IntelliJLaf.class.getName());
-                    resourcesGroup.addItem(info);
-                }
-            }
-            finally {
-                resourcesGroup.putClientProperty(BLOCK_REFRESH, false);
-            }
-        }
-
-        // select resource in group
-        PropertiesFile selectedPropertiesFile = model.getSelectedPropertiesFile();
-        if (selectedPropertiesFile!=null) {
-            String bestPropetiesFilePath = selectedPropertiesFile.getVirtualFile().getPath();
-            for (int i = 0; i < resourcesGroup.getItemCount(); i++) {
-                MyPropertiesFileInfo item = (MyPropertiesFileInfo) resourcesGroup.getItemAt(i);
-                String path = item.getPropertiesFile().getVirtualFile().getPath();
-                if (bestPropetiesFilePath.equals(path)) {
-
-                    if (resourcesGroup.getSelectedIndex() != i)
-                        resourcesGroup.setSelectedIndex(i);
-                    break;
-                }
-            }
-        }
-
-        resourcesGroup.setToolTipText(model.getSelectedPropertiesFileTooltip());
     }
 
     /**
@@ -573,131 +368,10 @@ public class TranslationSnapView extends AbstractSnapView {
     }
 
     /**
-     * openResourceBundleFile
-     * @param index
-     */
-    private void openResourceBundleFile(int index) {
-
-        PropertiesFile propertiesFile;
-        if (index<0) {
-            MyPropertiesFileInfo selectedItem = (MyPropertiesFileInfo) resourcesGroup.getSelectedItem();
-            propertiesFile = selectedItem.getPropertiesFile();
-        }
-        else {
-            String selectedLanguage = getLanguage(index);
-            propertiesFile = I18nUtil.getPsiPropertiesFile(model.getSelectedPropertiesFile().getResourceBundle(), selectedLanguage);
-        }
-
-        if (propertiesFile == null)
-            return;
-
-        List<IProperty> properties = propertiesFile.findPropertiesByKey(key.getText());
-        if (!properties.isEmpty()) {
-            PsiElement nav = properties.get(0).getPsiElement().getNavigationElement();
-            if (nav instanceof Navigatable) {
-                ((Navigatable) nav).navigate(true);
-                return;
-            }
-        }
-
-        ((Navigatable)propertiesFile.getContainingFile().getNavigationElement()).navigate(true);
-    }
-
-    /**
-     * refreshWhenDocumentUpdated
-     */
-    private void refreshWhenDocumentUpdated() {
-
-        if (model == null)
-            return;
-
-        PsiDocumentManager.getInstance(project).performWhenAllCommitted(
-                () -> {
-                    try {
-                        SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) () ->
-                                loadTranslation(model.getSelectedKey(), null));
-                    } catch (Throwable ee) {
-                        LOG.error("Translation init error", ee);
-                    }
-                }
-        );
-    }
-
-    /**
-     * findI18NKey
-     */
-    private String findI18NKey(PsiReference target, Module module) {
-
-        // multi references
-        if (target instanceof PsiMultiReference) {
-
-            PsiMultiReference mref = (PsiMultiReference)target;
-            for (PsiReference ref : mref.getReferences()) {
-
-                String key = findI18NKey(ref, module);
-                if (key != null)
-                    return key;
-            }
-
-            return null;
-        }
-
-        return target.getCanonicalText();
-    }
-
-    /**
-     * findI18NKey
-     */
-    private String findI18NKey(PsiElement target, Module module) {
-
-        if (target instanceof Property) {
-
-            Property property = (Property)target;
-            return property.getFirstChild().getText().trim();
-        }
-
-        String text = target.getText();
-        if (!text.startsWith("'") && !text.startsWith("\""))
-            return null;
-
-        return target.getText();
-    }
-
-    /**
      * createEditActionGroup
      */
     protected ActionGroup createEditActionGroup() {
         DefaultActionGroup group = new DefaultActionGroup();
-
-        // edit action
-        this.editAction = new ToggleAction("Edit key") {
-
-            @Override
-            public boolean isSelected(AnActionEvent e) {
-                return key.isEditable();
-            }
-
-            @Override
-            public void setSelected(AnActionEvent e, boolean state) {
-                key.setEditable(state);
-                if (state)
-                    key.grabFocus();
-                else if (key.hasFocus())
-                    key.transferFocus();
-            }
-
-            @Override
-            public void update(@NotNull AnActionEvent e) {
-                if  (deleteOrCreateKeyButton.getText().equals(CREATE_KEY)) {
-                    e.getPresentation().setIcon(I18NIcons.FIND);
-                    e.getPresentation().setText("Select another key or create a new key...", false);
-                }
-                else {
-                    e.getPresentation().setIcon(I18NIcons.EDIT);
-                    e.getPresentation().setText("Rename key...", false);
-                }
-            }
-        };
 
         group.add(editAction);
 
@@ -713,14 +387,14 @@ public class TranslationSnapView extends AbstractSnapView {
         // left
         AnAction leftAction = new AnAction("Left") {
             @Override
-            public void actionPerformed(AnActionEvent e) {
-                if (model.scrollLeft())
-                    loadTranslation(model.getSelectedKey(), null);
+            public void actionPerformed(@NotNull AnActionEvent e) {
+                if (model.scrollLeftOnKeyPath())
+                    updateUiOrFlagDirty();
             }
 
             @Override
             public void update(AnActionEvent e) {
-                e.getPresentation().setVisible(model.getKeyPath().indexOf('.') > 0);
+                e.getPresentation().setVisible(isPathFile(model.getKeyPath()));
                 e.getPresentation().setEnabled(model.getSelectedKey().length() < model.getKeyPath().length());
             }
         };
@@ -731,281 +405,165 @@ public class TranslationSnapView extends AbstractSnapView {
         // right
         AnAction rightAction = new AnAction("Right") {
             @Override
-            public void actionPerformed(AnActionEvent e) {
-                if (model.scrollRight())
-                    loadTranslation(model.getSelectedKey(), null);
+            public void actionPerformed(@NotNull AnActionEvent e) {
+                if (model.scrollRightOnSelectedKey())
+                    updateUiOrFlagDirty();
             }
 
             @Override
             public void update(AnActionEvent e) {
-                e.getPresentation().setVisible(model.getKeyPath().indexOf('.') > 0);
-                e.getPresentation().setEnabled(model.getSelectedKey().indexOf('.') > 0);
+                e.getPresentation().setVisible(isPathFile(model.getKeyPath()));
+                e.getPresentation().setEnabled(isPathFile(model.getSelectedKey()));
             }
         };
         rightAction.getTemplatePresentation().setIcon(I18NIcons.RIGHT);
-        rightAction.getTemplatePresentation().setText("Next in dot notation", false);
+        rightAction.getTemplatePresentation().setText("Next in Dot Notation", false);
         group.add(rightAction);
 
 
         return group;
     }
 
-    /**
-     * initTranslation
-     */
-    private void initTranslation(final Editor editor) {
-        if (editor.isDisposed()) {
-            LOG.trace("initTranslation : editor is disposed - END");
-            return;
-        }
 
-        Project project = editor.getProject();
-        if (project == null) {
-            LOG.trace("initTranslation : no project found - END");
-            return;
-        }
 
-        if (!project.equals(this.project))
-            return;
-
-        Boolean block = (Boolean) getClientProperty(BLOCK_I18N);
-        if (Boolean.TRUE.equals(block)) {
-            LOG.trace("initTranslation : blocked - END");
-            return;
-        }
-
-        PsiDocumentManager.getInstance(project).performForCommittedDocument(editor.getDocument(),
-                () -> {
-
-                    LOG.trace("initTranslation : search for reference...");
-
-                    // Search for reference
-                    Module module = null;
-                    String key = null;
-
-                    PsiReference referenceTarget = null;
-                    try {
-                        referenceTarget = SlowOperations.allowSlowOperations((ThrowableComputable<PsiReference, Throwable>) () ->
-                                findReferenceTarget(editor));
-                    } catch (Throwable e) {
-                        LOG.error("Translation init error", e);
-                    }
-
-                    LOG.trace("initTranslation : reference : " + referenceTarget);
-                    if (referenceTarget != null) {
-
-                        module = JavaUtil.getModule(referenceTarget.getElement());
-                        String text = findI18NKey(referenceTarget, module);
-                        LOG.trace("initTranslation : text : " + referenceTarget);
-                        if (text != null && !text.contains(" "))
-                            key = StringUtil.removeQuotes(text);
-
-                    }
-
-                    if (key == null) {
-
-                        LOG.trace("initTranslation : key not found yet...");
-                        // Search for element
-                        PsiElement target = findTarget(editor);
-                        LOG.trace("initTranslation : target : " + target);
-                        if (target != null) {
-
-                            module = JavaUtil.getModule(target);
-                            String text = findI18NKey(target, module);
-                            LOG.trace("initTranslation : text : " + text);
-                            if (text != null && !text.contains(" "))
-                                key = StringUtil.removeQuotes(text);
-                        }
-                    }
-
-                    LOG.trace("initTranslation : key : " + key);
-                    if (key != null) {
-                        try {
-                            String finalKey = key;
-                            Module finalModule = module;
-                            SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) () ->
-                                    initTranslationKey(finalKey, false, FileUtil.getFile(editor), finalModule));
-                        } catch (Throwable e) {
-                            LOG.error("Translation init error", e);
-                        }
-                    }
-                });
-    }
-
-    /**
-     * findTarget
-     */
-    protected PsiReference findReferenceTarget(Editor editor) {
-
-        int offset = editor.getCaretModel().getOffset();
-
-        Project project = editor.getProject();
-        if (project == null)
-            return null;
-
-        if (!project.equals(this.project))
-            return null;
-
-        Document document = editor.getDocument();
-
-        PsiFile file = FileUtil.getFile(document, project);
-        if (file == null)
-            return null;
-
-        PsiReference referenceAt = file.findReferenceAt(offset);
-        if (referenceAt == null)
-            return null;
-
-        return referenceAt;
-    }
-
-    /**
-     * findTarget
-     */
-    protected PsiElement findTarget(Editor editor) {
-        int offset = editor.getCaretModel().getOffset();
-
-        Project project = editor.getProject();
-        if (project == null)
-            return null;
-
-        if (!project.equals(this.project))
-            return null;
-
-        Document document = editor.getDocument();
-
-        PsiFile file = FileUtil.getFile(document, project);
-        if (file == null)
-            return null;
-
-        PsiElement element = file.findElementAt(offset);
-        if (element == null)
-            return null;
-
-        Property property = SPsiUtils.findSurrounding(element, Property.class);
-        if (property !=null) {
-            return property.getNavigationElement();
-        }
-
-        if (element instanceof TreeElement) {
-            TreeElement token = (TreeElement)element;
-            if (JavaTokenType.STRING_LITERAL.equals(token.getElementType())) {
-                return element;
-            }
-        }
-
-        return null;
-    }
 
     /*****************************************************
-     * initComponents
+     * initComponentsOnce
      */
-    private void initComponents(List<String> langs) {
+    @Override
+    public void initComponentsFixSpecific() {
+        deleteOrCreateKeyButton.setText(DELETE_KEY);
+        deleteOrCreateKeyButton.addActionListener(e -> {
+            if (DELETE_KEY.equals(deleteOrCreateKeyButton.getText())) {
+                String key = model.getSelectedKey();
+                try {
+                    SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) () -> {
+                        model.deleteKey();
+                        model.setSelectedKey(key);
+                        //uiInitWithTranslationKey(key, true, model.getOriginFile(), model.getModule());
+                    });
+                } catch (Throwable ee) {
+                    LOG.error("initComponentsFixSpecific on button delete or create ", ee);
+                }
+            }
+            else {
+                model.createKey();
+            }
+
+            refreshWhenDocumentUpdated();
+        });
+        updateFontSize(deleteOrCreateKeyButton);
+
+        duplicateButton.addActionListener(e -> {
+            try {
+                SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) this::duplicateKey);
+            } catch (Throwable ee) {
+                LOG.error("initComponentsFixSpecific on button duplicate", ee);
+            }
+        });
+        duplicateButton.setIcon(I18NIcons.DUPLICATE);
+        updateFontSize(duplicateButton);
+        duplicateButton.setText("Duplicate key");
+
+        editActionToolBar.setMinimumButtonSize(new Dimension(25, 20));
+        editActionToolBar.setTargetComponent(this);
 
         // JFormDesigner - Component initialization - DO NOT MODIFY  //GEN-BEGIN:initComponents
         // Generated using JFormDesigner Evaluation license - Maxime HAMM
         translationWindow = new JPanel();
-        key = new JTextField() {
-            @Override
-            public void setEditable(boolean b) {
-                super.setEditable(b);
-
-                JComponent fake = b ? new JTextField() : new JLabel();
-                setBorder(fake.getBorder());
-                setBackground(fake.getBackground());
-                setFont(fake.getFont().deriveFont(fake.getFont().getStyle() | Font.BOLD, fake.getFont().getSize() + 0f));
-            }
-
-            
-        };
-        key.addFocusListener(new FocusAdapter() {
+        keyTextField.addFocusListener(new FocusAdapter() {
             @Override
             public void focusLost(FocusEvent e) {
-                if (key.isEditable()) {
-                    key.setEditable(false);
-                    model.renameKey(key.getText());
+                if (keyTextField.isEditable()) {
+                    keyTextField.setEditable(false);
+                    model.renameKey(keyTextField.getText());
                     refreshWhenDocumentUpdated();
                 }
             }
         });
-        key.addKeyListener(new KeyAdapter() {
+        keyTextField.addKeyListener(new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent evt) {
                 int k = evt.getKeyCode();
                 if (k == KeyEvent.VK_ENTER)
-                    key.transferFocus();
+                    keyTextField.transferFocus();
             }
         });
 
         // JFormDesigner evaluation mark
         translationWindow.setLayout(new GridLayoutManager(5, 1, JBUI.insetsBottom(10), -1, -1));
 
-        {
-            JPanel topPanel = new JPanel();
-            topPanel.setLayout(new GridLayoutManager(1, 3, JBUI.insets(0,13, 0,7), -1, -1));
+        JPanel topPanel = getTopPanel();
 
-            //--- edit button ---
-            JPanel p = new JPanel();
-            p.add(editActionToolBar.getComponent());  // wrap the edit button to keep layout will hiding it
+        translationWindow.add(topPanel, new GridConstraints(0, 0, 1, 1,
+            GridConstraints.ANCHOR_SOUTHWEST, GridConstraints.FILL_HORIZONTAL,
+            GridConstraints.SIZEPOLICY_CAN_GROW |  GridConstraints.SIZEPOLICY_CAN_SHRINK,
+            GridConstraints.SIZEPOLICY_FIXED,
+            new Dimension(36, 30), null, null));
 
-            topPanel.add(p, new GridConstraints(0, 0, 1, 1,
-                    GridConstraints.ANCHOR_NORTH, GridConstraints.FILL_BOTH,
-                    GridConstraints.SIZEPOLICY_FIXED,
-                    GridConstraints.SIZEPOLICY_FIXED,
-                    new Dimension(35, 35),  new Dimension(35, 35), new Dimension(35, 35)));
+        JScrollPane scroll = ScrollPaneFactory.createScrollPane(translationPanel, true);
+        scroll.setPreferredSize(new Dimension(translationPanel.getPreferredSize().width + scroll.getVerticalScrollBar().getPreferredSize().width + 5, -1));
+        scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setMinimumSize(new Dimension(-1, 50));
 
-            //---- key ----
-            key.setEditable(false);
-            topPanel.add(key, new GridConstraints(0, 1, 1, 1,
-                    GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                    GridConstraints.SIZEPOLICY_CAN_GROW |  GridConstraints.SIZEPOLICY_CAN_SHRINK,
-                    GridConstraints.SIZEPOLICY_FIXED,
-                    new Dimension(30, 25), null, null, 0));
+        translationWindow.add(scroll, new GridConstraints(1, 0, 1, 1,
+            GridConstraints.ANCHOR_WEST, GridConstraints.FILL_BOTH,
+            GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW ,
+            GridConstraints.SIZEPOLICY_CAN_GROW,
+            null, null,
+            null));
 
-            //--- key next and previous buttons ---
-            ActionGroup prevNextActionGroup = createPreviousNextActionGroup();
-            ActionToolbar prevNextActionToolBar = ActionManager.getInstance().createActionToolbar("PN", prevNextActionGroup, true);
-            prevNextActionToolBar.setMinimumButtonSize(new Dimension(14, 20));
-            prevNextActionToolBar.setTargetComponent(this);
+        //---- Bottom ----
+        JPanel bottom = new JPanel();
+        bottom.setLayout(new GridBagLayout());  // TIPS : Use java.awt.GridBagLayout because IntelliJ layout manger went to silly spaces...
 
-            topPanel.add(prevNextActionToolBar.getComponent(), new GridConstraints(0, 2, 1, 1,
-                    GridConstraints.ANCHOR_EAST, GridConstraints.FILL_NONE,
-                    GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
-                    null, new Dimension(45, 20), null));
+        resourcesGroup.setMinimumAndPreferredWidth(120);
+        bottom.add(resourcesGroup, new GridBagConstraints(0, 0, 1, 1,
+            1.0, 0.0, GridBagConstraints.WEST, GridBagConstraints.HORIZONTAL,  JBUI.insets(0, 50, 0, 0), 0, 0));
 
-            translationWindow.add(topPanel, new GridConstraints(0, 0, 1, 1,
-                    GridConstraints.ANCHOR_SOUTHWEST, GridConstraints.FILL_HORIZONTAL,
-                    GridConstraints.SIZEPOLICY_CAN_GROW |  GridConstraints.SIZEPOLICY_CAN_SHRINK,
-                    GridConstraints.SIZEPOLICY_FIXED,
-                    new Dimension(36, 30), null, null));
-        }
+        bottom.add(duplicateButton, new GridBagConstraints(1, 0, 1, 1,
+            0.0, 0.0, GridBagConstraints.WEST, GridBagConstraints.NONE,  JBUI.insets(0, 5, 0, 0), 0, 0));
 
-        
+
+        bottom.add(deleteOrCreateKeyButton, new GridBagConstraints(2, 0, 1, 1,
+            0.0, 0.0, GridBagConstraints.EAST, GridBagConstraints.NONE,  JBUI.insets(0, 3, 0, 43), 0, 0));
+
+        translationWindow.add(bottom, new GridConstraints(2, 0, 1, 1,
+            GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+            GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+            GridConstraints.SIZEPOLICY_FIXED,
+            null, null, null));
+    }
+
+    @Override
+    public void initComponentsDynamic() {
+
+        List<String> langs = ( model == null ? Collections.emptyList() : model.getLanguages());
+
+        final int newArraySize = langs.size();
+        if (flags.length == newArraySize)
+            return; // sufficient dynamic components are already available
         //---- flag ----
-        flags = new ActionLink[langs.size()];
-        translations = new JTextComponent[langs.size()];
-        languages = new ActionLink[langs.size()];
+        translationPanel.removeAll();
+        flags = new ActionLink[newArraySize];
+        translations = new JTextComponent[newArraySize];
+        languages = new ActionLink[newArraySize];
+        translationsPaneAdaptors = new MyTranslationPaneAdapter[newArraySize];
 
-        JPanel translationPanel = new JPanel();
-        if (langs.size()>0) {
-
+        if (!langs.isEmpty()) {
             translationPanel.setLayout(new GridLayoutManager(langs.size(), 3, JBUI.insets(10, 15, 10, 5), -1, -1));
 
             for (int i = 0; i < langs.size(); i++) {
 
                 int finalI = i;
 
-                flags[i] = new ActionLink("", actionEvent -> { openResourceBundleFile(finalI); });
-                flags[i].setAlignmentY(0.0F);
-                flags[i].setMinimumSize(new Dimension(25, 20));
-                flags[i].setToolTipText("Open properties file...");
-                flags[i].setRolloverIcon(I18NIcons.MOVE_TO);
+                flags[i] = getNewLanguageFlag(i, keyTextField.getText());
 
                 translationPanel.add(flags[i], new GridConstraints(i, 0, 1, 1,
-                        GridConstraints.ANCHOR_NORTHEAST, GridConstraints.FILL_NONE,
-                        GridConstraints.SIZEPOLICY_CAN_SHRINK,
-                        GridConstraints.SIZEPOLICY_CAN_SHRINK,
-                        null, null, null));
+                    GridConstraints.ANCHOR_NORTHEAST, GridConstraints.FILL_NONE,
+                    GridConstraints.SIZEPOLICY_CAN_SHRINK,
+                    GridConstraints.SIZEPOLICY_CAN_SHRINK,
+                    null, null, null));
 
                 //---- translation ----
                 translations[i] = new JTextPane();
@@ -1015,61 +573,63 @@ public class TranslationSnapView extends AbstractSnapView {
                 translations[i].setFont(flags[i].getFont());
                 JBScrollPane scroller = new JBScrollPane(translations[i]); // TIPS : Use scroller otherwise the textarea will not shrink !!
                 translationPanel.add(scroller, new GridConstraints(i, 1, 1, 1,
-                        GridConstraints.ANCHOR_NORTHWEST, GridConstraints.FILL_BOTH,
-                        GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                        GridConstraints.SIZEPOLICY_CAN_SHRINK,
-                        null, null, null));
+                    GridConstraints.ANCHOR_NORTHWEST, GridConstraints.FILL_BOTH,
+                    GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                    GridConstraints.SIZEPOLICY_CAN_SHRINK,
+                    null, null, null));
 
                 //---- lang ----
-                languages[i] = new ActionLink("", actionEvent -> {
-                    googleTranslation(finalI);
-                });
+                languages[i] = new ActionLink("", (ActionListener) actionEvent ->
+                    googleTranslation(finalI)
+                );
 
                 languages[i].setMinimumSize(new Dimension(30, 20));
                 languages[i].setHorizontalTextPosition(SwingConstants.LEFT);
                 translationPanel.add(languages[i], new GridConstraints(i, 2, 1, 1,
-                        GridConstraints.ANCHOR_NORTHWEST, GridConstraints.FILL_NONE,
-                        GridConstraints.SIZEPOLICY_CAN_SHRINK,
-                        GridConstraints.SIZEPOLICY_FIXED,
-                        null, null, null));
+                    GridConstraints.ANCHOR_NORTHWEST, GridConstraints.FILL_NONE,
+                    GridConstraints.SIZEPOLICY_CAN_SHRINK,
+                    GridConstraints.SIZEPOLICY_FIXED,
+                    null, null, null));
                 languages[i].setToolTipText("Google translate...");
                 languages[i].setRolloverIcon(I18NIcons.GOOGLE_TRANSALTE);
             }
         }
+    }
 
-        JScrollPane scroll = ScrollPaneFactory.createScrollPane(translationPanel, true);
-        scroll.setPreferredSize(new Dimension(translationPanel.getPreferredSize().width + scroll.getVerticalScrollBar().getPreferredSize().width + 5, -1));
-        scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        scroll.setMinimumSize(new Dimension(-1, 50));
+    @NotNull
+    private JPanel getTopPanel() {
+        JPanel topPanel = new JPanel();
+        topPanel.setLayout(new GridLayoutManager(1, 3, JBUI.insets(0,13, 0,7), -1, -1));
 
-        translationWindow.add(scroll, new GridConstraints(1, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW ,
-                GridConstraints.SIZEPOLICY_CAN_GROW,
-                null, null,
-                null));
+        //--- edit button ---
+        JPanel p = new JPanel();
+        p.add(editActionToolBar.getComponent());  // wrap the edit button to keep layout will hiding it
 
-        //---- Bottom ----
-        JPanel bottom = new JPanel();
-        bottom.setLayout(new GridBagLayout());  // TIPS : Use java.awt.GridBagLayout because IntelliJ layout manger went to silly spaces...
-
-        resourcesGroup.setMinimumAndPreferredWidth(120);
-        bottom.add(resourcesGroup, new GridBagConstraints(0, 0, 1, 1,
-                1.0, 0.0, GridBagConstraints.WEST, GridBagConstraints.HORIZONTAL,  new Insets(0, 50, 0, 0), 0, 0));
-
-        bottom.add(duplicateButton, new GridBagConstraints(1, 0, 1, 1,
-                0.0, 0.0, GridBagConstraints.WEST, GridBagConstraints.NONE,  new Insets(0, 5, 0, 0), 0, 0));
-
-
-        bottom.add(deleteOrCreateKeyButton, new GridBagConstraints(2, 0, 1, 1,
-                0.0, 0.0, GridBagConstraints.EAST, GridBagConstraints.NONE,  new Insets(0, 3, 0, 43), 0, 0));
-
-        translationWindow.add(bottom, new GridConstraints(2, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+        topPanel.add(p, new GridConstraints(0, 0, 1, 1,
+                GridConstraints.ANCHOR_NORTH, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null));
+                GridConstraints.SIZEPOLICY_FIXED,
+                new Dimension(35, 35),  new Dimension(35, 35), new Dimension(35, 35)));
 
+        //---- key ----
+        keyTextField.setEditable(false);
+        topPanel.add(keyTextField, new GridConstraints(0, 1, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_GROW |  GridConstraints.SIZEPOLICY_CAN_SHRINK,
+                GridConstraints.SIZEPOLICY_FIXED,
+                new Dimension(30, 25), null, null, 0));
+
+        //--- key next and previous buttons ---
+        ActionGroup prevNextActionGroup = createPreviousNextActionGroup();
+        ActionToolbar prevNextActionToolBar = ActionManager.getInstance().createActionToolbar("PN", prevNextActionGroup, true);
+        prevNextActionToolBar.setMinimumButtonSize(new Dimension(14, 20));
+        prevNextActionToolBar.setTargetComponent(this);
+
+        topPanel.add(prevNextActionToolBar.getComponent(), new GridConstraints(0, 2, 1, 1,
+                GridConstraints.ANCHOR_EAST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, new Dimension(45, 20), null));
+        return topPanel;
     }
 
     private void googleTranslation(int index) {
@@ -1077,114 +637,138 @@ public class TranslationSnapView extends AbstractSnapView {
         if (! this.translations[index].isEditable())
             return;
 
-        // try to use best laguage
-        String key = this.key.getText();
+    ProgressManager.getInstance()
+        .run(
+            new MyGoogleTranslationRun(model.getProject(), "Google translate", true,
+                index, this.keyTextField.getText()) ); // try to use best language
+    }
 
-        ProgressManager.getInstance()
-                .run(new Backgroundable(project, "Google translate", true) {
+    private class MyGoogleTranslationRun extends Backgroundable {
 
-                    private boolean canceled = false;
+        private boolean canceled = false;
 
-                    @Override
-                    public void run(@NotNull ProgressIndicator indicator) {
+        final int index;
+        final String key;
 
-                        Module module = model.getModule();
-                        String sourceLanguage = null;
-                        String sourceTranslation = null;
+        public MyGoogleTranslationRun(@Nullable Project project,
+                                     @NlsContexts.ProgressTitle @NotNull String title,
+                                     boolean canBeCancelled, final int index, final String key ) {
+            super(project, title, canBeCancelled);
+            this.index = index;
+            this.key = key;
+        }
 
-                        // get target language
-                        String targetLanguage = getLanguage(index);
+        @Override
+        public void run(@NotNull ProgressIndicator indicator) {
 
-                        // try using other languages
-                        List<IProperty> psiProperties = ApplicationManager.getApplication().runReadAction((Computable<List<IProperty>>) () ->
-                                I18nUtil.getPsiProperties(key, null, module));
+            Module module = model.getModule();
+            String sourceLanguage = null;
+            String sourceTranslation = null;
 
-                        for (IProperty property : psiProperties) {
+            // get target language
+            String targetLanguage = getLanguage(index);
 
-                            String translation = I18nUtil.unescapeKeepCR(property.getValue());
-                            if (translation == null || translation.trim().isEmpty())
-                                continue;
+            // try using other languages
+            List<IProperty> psiProperties =
+                ApplicationManager.getApplication()
+                    .runReadAction(
+                        (Computable<List<IProperty>>)
+                            () -> I18nUtil.getPsiProperties(key, null, module));
 
-                            String lang =  I18nUtil.getLanguage(property.getPropertiesFile());
-                            if (Objects.equals(lang, targetLanguage))
-                                continue;
+            for (IProperty property : psiProperties) {
 
-                            sourceLanguage = lang;
-                            sourceTranslation = translation;
+                String translation = I18nUtil.unescapeKeepCR(property.getValue());
+                if (translation != null && !translation.trim().isEmpty()) {
 
-                            break;
-                        }
-
-                        // use the translation key if no best choice
-                        if (sourceLanguage == null) {
-
-                            sourceLanguage = Locale.ENGLISH.getLanguage();
-                            sourceTranslation = I18nUtil.prepareKeyForGoogleTranslation(key);
-                        }
-
-                        // well no more suggestions !
-                        Project project = module.getProject();
-                        if (sourceLanguage == null) {
-
-                            Messages.showErrorDialog(project, "No source found for translation !", NIMBLY);
-                            return;
-                        }
-
-                        // do translation
-                        String finalSourceLanguage = sourceLanguage;
-                        String finalSourceTranslation = sourceTranslation;
-
-                        String translation;
-                        try {
-
-                            translation = I18nUtil.googleTranslate(key, targetLanguage, finalSourceLanguage, finalSourceTranslation);
-
-                        } catch (SocketTimeoutException | UnknownHostException e) {
-                            if (canceled)
-                                return;
-
-                            LOG.warn("Communication error", e);
-                            Messages.showErrorDialog(module.getProject(), "Communication error. Check your internet connection and proxy settings", NIMBLY);
-
-                            return;
-
-                        } catch (Exception e) {
-                            if (canceled)
-                                return;
-
-                            LOG.error("Translation error", e);
-                            Messages.showErrorDialog(module.getProject(), "Translation error. See logs for more informations", NIMBLY);
-
-                            return;
-                        }
-
-                        if (canceled)
-                            return;
-
-                        if (translation == null) {
-                            Messages.showInfoMessage(module.getProject(), "No translation found", NIMBLY);
-                            return;
-                        }
-
-                        // Do update key
-                        PropertiesFile targetFile = I18nUtil.getPsiPropertiesSiblingFile(model.getSelectedPropertiesFile(), targetLanguage);
-                        if (targetFile!=null) {
-                            I18nUtil.doUpdateTranslation(key, translation, targetFile, true);
-//                            ApplicationManager.getApplication().invokeLater(
-//                                    () -> I18nUtil.doUpdateTranslation(key, translation, targetFile, true));
-                        }
-                     }
-
-                    @Override
-                    public boolean shouldStartInBackground() {
-                        return true;
+                    String lang = I18nUtil.getLanguage(property.getPropertiesFile());
+                    if (lang != null && !targetLanguage.equals(lang)) {
+                        sourceLanguage = lang;
+                        sourceTranslation = translation;
+                        break;
                     }
+                }
+            }
 
-                    @Override
-                    public void onCancel() {
-                        canceled = true;
-                    }
-                });
+            // use the translation key if no best choice
+            if (sourceLanguage == null) {
+
+                sourceLanguage = Locale.ENGLISH.getLanguage();
+                sourceTranslation = I18nUtil.prepareKeyForGoogleTranslation(key);
+            }
+
+            // do translation
+            doTranslation(module, sourceLanguage, targetLanguage, sourceTranslation);
+        }
+
+        private void doTranslation(final Module module, final String sourceLanguage, final String targetLanguage, final String sourceTranslation) {
+
+            // well no more suggestions !
+            Project project = module.getProject();
+            if (sourceLanguage == null) {
+
+                Messages.showErrorDialog(project, "No source found for translation !", NIMBLY);
+                return;
+            }
+
+
+            String translation;
+            try {
+
+                translation =
+                    I18nUtil.googleTranslate( sourceLanguage, targetLanguage,
+                        sourceTranslation, key);
+
+            } catch (SocketTimeoutException | UnknownHostException e) {
+                if (canceled) return;
+
+                LOG.warn("Communication error", e);
+                Messages.showErrorDialog(
+                    module.getProject(),
+                    "Communication error. Check your internet connection and proxy settings",
+                    NIMBLY);
+
+                return;
+
+            } catch (Exception e) {
+                if (canceled) return;
+
+                LOG.error("Translation error", e);
+                Messages.showErrorDialog(
+                    module.getProject(),
+                    "Translation error. See logs for more informations",
+                    NIMBLY);
+
+                return;
+            }
+
+            if (canceled) return;
+
+            if (translation == null) {
+                Messages.showInfoMessage(module.getProject(), "No translation found", NIMBLY);
+                return;
+            }
+
+            // Do update key
+            PropertiesFile targetFile =
+                I18nUtil.getPsiPropertiesSiblingFile(
+                    model.getSelectedPropertiesFile(), targetLanguage);
+            if (targetFile != null) {
+                I18nUtil.doUpdateTranslation(key, translation, targetFile, true);
+                //                            ApplicationManager.getApplication().invokeLater(
+                //                                    () -> I18nUtil.doUpdateTranslation(key,
+                // translation, targetFile, true));
+            }
+        }
+
+        @Override
+        public boolean shouldStartInBackground() {
+            return true;
+        }
+
+        @Override
+        public void onCancel() {
+            canceled = true;
+        }
     }
 
     /*******************************************$
@@ -1192,30 +776,17 @@ public class TranslationSnapView extends AbstractSnapView {
      */
     private class MyTranslationPaneAdapter extends com.intellij.ui.DocumentAdapter implements FocusListener {
 
-        private int index;
+        private final int index;
 
         public MyTranslationPaneAdapter(int index) {
             this.index = index;
         }
 
         @Override
-        protected void textChanged(javax.swing.event.DocumentEvent e) {
-            Boolean block = (Boolean) TranslationSnapView.this.getClientProperty(BLOCK_I18N);
-            if (!Boolean.TRUE.equals(block)) {
-
-                PsiDocumentManager.getInstance(model.getModule().getProject()).performLaterWhenAllCommitted(
-                    () -> {
-                        try {
-                            SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) () ->
-                                    model.updateKey(getLanguage(index), translations[index].getText()));
-                        } catch (Throwable ee) {
-                            LOG.error("Translation init error", ee);
-                        }
-
-                    }
-                );
-
-            }
+        protected void textChanged(javax.swing.event.@NotNull DocumentEvent e) {
+            final String language = getLanguage(index);
+            final String translation = translations[index].getText();
+            updateTranslation(TranslationSnapView.this, language, translation);
         }
 
         @Override
@@ -1224,7 +795,7 @@ public class TranslationSnapView extends AbstractSnapView {
             if (language!=null) {
                 try {
                     SlowOperations.allowSlowOperations((ThrowableRunnable<Throwable>) () ->
-                            updateEditButton(language));
+                        updateResourcesGroupButton(language));
                 } catch (Throwable ee) {
                     LOG.error("Translation init error", ee);
                 }
@@ -1233,8 +804,8 @@ public class TranslationSnapView extends AbstractSnapView {
 
         @Override
         public void focusLost(FocusEvent e) {
+            // nothing to be done on lost focus
         }
-
 
     }
 
@@ -1244,22 +815,24 @@ public class TranslationSnapView extends AbstractSnapView {
      */
     private class MyPropertiesFileAdapter implements DocumentListener {
 
-        private PropertyKeyImpl key = null;
+        // private PropertyKeyImpl key = null;
 
         @Override
-        public void beforeDocumentChange(DocumentEvent e) {
-
+        public void beforeDocumentChange(@NotNull DocumentEvent e) {
+            // nothing to do (code kept for debugging purposes)
+            /*
             if (model == null)
                 return;
 
             PropertyKeyImpl k = findPropertyKey(e);
             if (k!=null && k.getText().equals(model.getSelectedKey()))
                 key = k;
+             */
 
         }
 
         @Override
-        public void documentChanged(DocumentEvent e) {
+        public void documentChanged(@NotNull DocumentEvent e) {
 
             if (model == null)
                 return;
@@ -1268,11 +841,9 @@ public class TranslationSnapView extends AbstractSnapView {
                 return;
 
             Module module = model.getModule();
-            PsiDocumentManager.getInstance(
-                    module.getProject()).performForCommittedDocument(e.getDocument(),
-                    () -> {
-                        refreshWhenDocumentUpdated();
-                    });
+      PsiDocumentManager.getInstance(module.getProject())
+          .performForCommittedDocument(
+              e.getDocument(), TranslationSnapView.this::refreshWhenDocumentUpdated);
         }
 
 
@@ -1289,27 +860,5 @@ public class TranslationSnapView extends AbstractSnapView {
         }
     }
 
-    /*******************************************$
-     *  MyPropertiesFileInfo
-     */
-    private class MyPropertiesFileInfo extends UIManager.LookAndFeelInfo {
 
-        private final PropertiesFile propertiesFile;
-
-        public MyPropertiesFileInfo(String label, PropertiesFile propertiesFile, String className) {
-            super(label, className);
-            this.propertiesFile = propertiesFile;
-        }
-
-        public PropertiesFile getPropertiesFile() {
-            return propertiesFile;
-        }
-
-        @Override
-        public String toString() {
-            return getName();
-        }
-    }
-
-    
 }

@@ -31,16 +31,23 @@ import org.jetbrains.annotations.Nullable;
  */
 public class FileUtil {
 
-    public static final Editor[] getEditors() {
+    private FileUtil() {
+        throw new IllegalStateException("Utility class");
+    }
+
+    public static Editor[] getEditors() {
         EditorFactory factory = EditorFactory.getInstance();
         if (factory == null)
-            return null;
+            return new Editor[0];
 
         return factory.getAllEditors();
     }
 
     public static PsiFile getFile(Editor editor) {
-        return PsiDocumentManager.getInstance(editor.getProject()).getPsiFile(editor.getDocument());
+        if (editor == null) return null;
+        final Project project = editor.getProject();
+        if (project == null) return null;
+        return PsiDocumentManager.getInstance(project).getPsiFile(editor.getDocument());
     }
 
     public static PsiFile getFile(Document document, Project project) {

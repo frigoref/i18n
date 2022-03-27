@@ -23,12 +23,16 @@ import com.intellij.openapi.diagnostic.Logger;
  */
 public class LoggerFactory {
 
-    public static Logger getInstance(Class clazz) {
+
+    private LoggerFactory() {
+        throw new IllegalStateException("Utility class");
+    }
+
+    public static Logger getInstance(Class<?> clazz) {
         return getInstance(clazz, null);
     }
 
-    public static Logger getInstance(Class clazz, String suffix) {
-
+    public static Logger getInstance(Class<?> clazz, String suffix) {
         String canonicalName = clazz.getName();
         if (canonicalName.startsWith("io.nimly.i18n"))
             canonicalName = "i18n.." + clazz.getSimpleName();

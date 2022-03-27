@@ -14,13 +14,13 @@
  */
 package io.nimbly.i18n.util;
 
+import static com.intellij.util.IconUtil.textToIcon;
+
 import com.intellij.ui.LayeredIcon;
 import com.intellij.ui.scale.JBUIScale;
+import javax.swing.Icon;
+import javax.swing.JLabel;
 import org.jetbrains.annotations.NotNull;
-
-import javax.swing.*;
-
-import static com.intellij.util.IconUtil.textToIcon;
 
 /**
  * IconUtils
@@ -30,6 +30,10 @@ import static com.intellij.util.IconUtil.textToIcon;
 public class IconUtil {
 
     public static final int SPACING = 10;
+
+    private IconUtil() {
+        throw new IllegalStateException("Utility class");
+    }
 
     /**
      * Add text

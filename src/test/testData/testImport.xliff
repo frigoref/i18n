@@ -1,0 +1,20 @@
+<xliff version='1.2' xmlns='urn:oasis:names:tc:xliff:document:1.2'>
+<file original='hello.txt' source-language='en' target-language='de' datatype='plaintext'>
+<body>
+<trans-unit id='test.Key1'>
+<source>My test</source>
+<target>Mein Test</target>
+<alt-trans>
+<target xml:lang='es'>Mi test</target>
+</alt-trans>
+</trans-unit>
+<trans-unit id='test.Key2'>
+<source>My comma test, easy</source>
+<target>Mein Kommatest, einfach</target>
+<alt-trans>
+<target xml:lang='es'>fácil</target>
+</alt-trans>
+</trans-unit>
+</body>
+</file>
+</xliff>
