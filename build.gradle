@@ -4,8 +4,11 @@ plugins {
     id 'java'
 }
 
+apply plugin: 'kotlin'
+
 group 'io.nimbly.i18n'
 version '1.3.1'
+
 
 repositories {
     mavenCentral()
